@@ -2,6 +2,11 @@
 
 Changes to Claude Desktop Session Sync for Linux, newest first. Dates use Asia/Saigon. The tool targets local sessions created in the **Claude Desktop Code tab** on the same machine and Linux user.
 
+## [0.6.2] — 2026-11-27
+
+- Prefer the longest verified Desktop transcript when it contains each shorter copy byte for byte. Keep reporting a conflict when histories diverge.
+- Keep undo compatible with sync backups created by 0.6.1.
+
 ## [0.6.1] — 2026-11-07
 
 - `backup` now writes a single `claude-backup-YYYYMMDD-HHMMSS.tar.gz` by default (standard gzip tar, about 3x smaller); `--format dir` keeps the folder layout. Archives are written as `.partial` and renamed when complete.

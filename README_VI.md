@@ -225,4 +225,4 @@ Nguồn tham khảo: [repo Windows gốc](https://github.com/realperest/claude-d
 
 ## Transcript trùng ID trong worktree
 
-Cùng transcript ID có thể có một file lịch sử Desktop và các file phụ chỉ chứa metadata ở những thư mục khác. Bản 0.3.2 xác minh từng file riêng và không để file phụ chặn đồng bộ. Các bản lịch sử giống hệt nhau được chấp nhận; các lịch sử đầy đủ khác nhau được báo xung đột và chỉ bỏ qua session liên quan. Sidecar release ở cạnh bất kỳ bản nào đều chặn session. Không di chuyển, gộp hay xóa transcript.
+Cùng transcript ID có thể xuất hiện trong nhiều thư mục dự án hoặc worktree. Toolkit xác minh từng file riêng và chấp nhận các bản lịch sử giống hệt nhau. Khi toàn bộ bản ngắn trùng từng byte với phần đầu của bản dài và cả hai đều xác minh được, toolkit ưu tiên bản dài. Nếu lịch sử rẽ nhánh, toolkit báo xung đột và chỉ bỏ qua phiên liên quan. Sidecar release ở cạnh bất kỳ bản nào đều chặn phiên đó. Các file transcript được giữ nguyên.

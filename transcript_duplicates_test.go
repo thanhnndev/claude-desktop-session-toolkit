@@ -68,6 +68,40 @@ func TestIdenticalTranscriptCopiesAndUniqueOrphans(t *testing.T) {
 	}
 }
 
+func TestPreferTranscriptThatExtendsAnotherCopy(t *testing.T) {
+	for _, dir := range []string{"aaa-worktree", "zzz-worktree"} {
+		t.Run(dir, func(t *testing.T) {
+			f := setup(t)
+			longer := filepath.Join("project", cli+".jsonl")
+			shorter := filepath.Join(dir, cli+".jsonl")
+			prefix, err := os.ReadFile(filepath.Join(f.projects, longer))
+			if err != nil {
+				t.Fatal(err)
+			}
+			put(t, filepath.Join(f.projects, shorter), prefix)
+			nextLine := []byte("\n" + `{"type":"assistant","sessionId":"` + cli + `"}` + "\n")
+			put(t, filepath.Join(f.projects, longer), append(prefix, nextLine...))
+
+			root, err := realRoot(f.projects)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			index, _, err := transcriptIndex(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected, proof, err := resolveTranscript(root, Record{Data: map[string]any{"cliSessionId": cli}}, index, nil, nil)
+			if err != nil || selected.Path != longer || proof != "direct" {
+				t.Fatalf("selected %q with proof %q: %v", selected.Path, proof, err)
+			}
+			if r := plan(t, f, "all"); len(r.Actions) != 1 || len(r.Warnings) != 0 {
+				t.Fatal(r)
+			}
+		})
+	}
+}
+
 func TestConflictingHistoriesSkipOnlyAffectedSession(t *testing.T) {
 	f := setup(t)
 	save(t, filepath.Join(f.projects, "worktree", cli+".jsonl"), map[string]any{"sessionId": cli, "entrypoint": "claude-desktop", "type": "assistant", "uuid": "different-history"})
