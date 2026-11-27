@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-const version = "0.6.1"
+const version = "0.6.2"
 
 var guard = processGuard
 
@@ -413,6 +413,7 @@ func list(r *os.Root, p string) ([]fs.DirEntry, error) {
 type Transcript struct {
 	Path             string
 	SHA256           string
+	Size             int64
 	SessionIDs       map[string]bool
 	DesktopIDs       map[string]bool
 	OtherEntrypoints map[string]bool
@@ -427,6 +428,7 @@ func inspectTranscript(h io.Reader, path string) (Transcript, error) {
 		if e != nil && e != io.EOF {
 			return tr, fmt.Errorf("read transcript %s at line %d: %w", path, line, e)
 		}
+		tr.Size += int64(len(b))
 		if len(bytes.TrimSpace(b)) > 0 {
 			var d struct {
 				SessionID  string `json:"sessionId"`
@@ -450,12 +452,7 @@ func inspectTranscript(h io.Reader, path string) (Transcript, error) {
 		}
 	}
 }
-func transcriptIndex(p string) (map[string][]Transcript, []string, error) {
-	r, e := realRoot(p)
-	if e != nil {
-		return nil, nil, e
-	}
-	defer r.Close()
+func transcriptIndex(r *os.Root) (map[string][]Transcript, []string, error) {
 	idx := map[string][]Transcript{}
 	desktopIDs := map[string]bool{}
 	dirs, e := list(r, ".")
@@ -524,31 +521,84 @@ func transcriptID(rec Record) string {
 	return str(rec.Data, "unarchivedCliSessionId")
 }
 
+// Compare against the scanned digests so a file that changes during the scan
+// cannot establish that one transcript extends the other.
+func transcriptExtends(r *os.Root, longer, shorter Transcript) (bool, error) {
+	if longer.Size <= shorter.Size {
+		return false, nil
+	}
+	if err := safe(r, longer.Path, false); err != nil {
+		return false, err
+	}
+	info, err := r.Lstat(longer.Path)
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() || info.Size() != longer.Size {
+		return false, fmt.Errorf("transcript changed during scan: %s", longer.Path)
+	}
+	f, err := r.Open(longer.Path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	hash := sha256.New()
+	if _, err := io.CopyN(hash, f, shorter.Size); err != nil {
+		return false, err
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != shorter.SHA256 {
+		return false, nil
+	}
+	n, err := io.Copy(hash, io.LimitReader(f, longer.Size-shorter.Size+1))
+	if err != nil {
+		return false, err
+	}
+	if n != longer.Size-shorter.Size || hex.EncodeToString(hash.Sum(nil)) != longer.SHA256 {
+		return false, fmt.Errorf("transcript changed during scan: %s", longer.Path)
+	}
+	return true, nil
+}
+
 // A bare Desktop marker from an unrelated inherited session is insufficient.
 // Forks need a real parent pointer, a proven Desktop parent, inherited parent
 // identity in the child's transcript, and a row carrying the child's own ID.
 // Evaluate each file separately: worktree metadata stubs are not conversation
 // histories, and provenance from separate files must never be combined.
-// Distinct proven histories are ambiguous even when one is newer or longer.
-func resolveTranscript(rec Record, index map[string][]Transcript, parents map[string][]Record, visiting map[string]bool) (Transcript, string, error) {
+// Prefer a verified continuation. Histories that diverge remain ambiguous.
+func resolveTranscript(r *os.Root, rec Record, index map[string][]Transcript, parents map[string][]Record, visiting map[string]bool) (Transcript, string, error) {
 	var selected Transcript
 	proof := ""
 	for _, tr := range index[transcriptID(rec)] {
-		p := transcriptProof(rec, tr, index, parents, visiting)
+		p := transcriptProof(r, rec, tr, index, parents, visiting)
 		if p == "" {
 			continue
 		}
-		if proof != "" && selected.SHA256 != tr.SHA256 {
+		if proof == "" {
+			selected, proof = tr, p
+			continue
+		}
+		if selected.SHA256 == tr.SHA256 {
+			continue
+		}
+		longer, shorter := selected, tr
+		if tr.Size > selected.Size {
+			longer, shorter = tr, selected
+		}
+		extends, err := transcriptExtends(r, longer, shorter)
+		if err != nil {
+			return Transcript{}, "", fmt.Errorf("cannot compare Desktop histories for transcript ID %s: %w", transcriptID(rec), err)
+		}
+		if !extends {
 			return Transcript{}, "", fmt.Errorf("Conflicting Desktop histories for transcript ID %s; session skipped (%s, %s)", transcriptID(rec), selected.Path, tr.Path)
 		}
-		if proof == "" {
+		if longer.Path == tr.Path {
 			selected, proof = tr, p
 		}
 	}
 	return selected, proof, nil
 }
 
-func transcriptProof(rec Record, tr Transcript, index map[string][]Transcript, parents map[string][]Record, visiting map[string]bool) string {
+func transcriptProof(r *os.Root, rec Record, tr Transcript, index map[string][]Transcript, parents map[string][]Record, visiting map[string]bool) string {
 	sid := transcriptID(rec)
 	if !tr.SessionIDs[sid] || tr.OtherEntrypoints[sid] {
 		return ""
@@ -569,7 +619,7 @@ func transcriptProof(rec Record, tr Transcript, index map[string][]Transcript, p
 	}
 	visiting[rec.Name] = true
 	defer delete(visiting, rec.Name)
-	_, parentProof, parentErr := resolveTranscript(parent, index, parents, visiting)
+	_, parentProof, parentErr := resolveTranscript(r, parent, index, parents, visiting)
 	if parentErr != nil || parentProof == "" {
 		return ""
 	}
@@ -695,7 +745,12 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 			}
 		}
 	}
-	transcripts, desktop, e := transcriptIndex(projects)
+	transcriptRoot, e := realRoot(projects)
+	if e != nil {
+		return rep, e
+	}
+	defer transcriptRoot.Close()
+	transcripts, desktop, e := transcriptIndex(transcriptRoot)
 	if e != nil {
 		return rep, e
 	}
@@ -769,7 +824,7 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 			continue
 		}
 		sid := transcriptID(first)
-		_, proof, resolveErr := resolveTranscript(first, transcripts, parents, map[string]bool{})
+		_, proof, resolveErr := resolveTranscript(transcriptRoot, first, transcripts, parents, map[string]bool{})
 		if resolveErr != nil {
 			rep.MissingTranscripts++
 			rep.Warnings = append(rep.Warnings, resolveErr.Error()+": "+name)
@@ -785,22 +840,16 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 		}
 		// A release sidecar beside any copy (including a metadata-only stub)
 		// means the transcript was explicitly released/deleted.
-		tr, e := realRoot(projects)
-		if e != nil {
-			return rep, e
-		}
 		released := false
 		for _, candidate := range transcripts[sid] {
 			sidecar := strings.TrimSuffix(candidate.Path, ".jsonl") + ".desktop-released.json"
-			_, statErr := tr.Lstat(sidecar)
+			_, statErr := transcriptRoot.Lstat(sidecar)
 			if statErr == nil {
 				released = true
 			} else if !errors.Is(statErr, fs.ErrNotExist) {
-				tr.Close()
 				return rep, statErr
 			}
 		}
-		tr.Close()
 		if released {
 			rep.Warnings = append(rep.Warnings, "Released transcript; skipped: "+name)
 			continue

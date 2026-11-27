@@ -1,3 +1,5 @@
+VERSION := $(shell sed -n 's/^const version = "\(.*\)"$$/\1/p' main.go)
+
 .PHONY: test build dist clean
 
 test:
@@ -18,8 +20,8 @@ dist: build
 	mkdir -p dist/linux-amd64/docs dist/linux-arm64/docs
 	cp docs/VERIFICATION.md dist/linux-amd64/docs/
 	cp docs/VERIFICATION.md dist/linux-arm64/docs/
-	tar -czf dist/claude-desktop-session-sync-linux-0.5.0-linux-amd64.tar.gz -C dist/linux-amd64 .
-	tar -czf dist/claude-desktop-session-sync-linux-0.5.0-linux-arm64.tar.gz -C dist/linux-arm64 .
+	tar -czf dist/claude-desktop-session-sync-linux-$(VERSION)-linux-amd64.tar.gz -C dist/linux-amd64 .
+	tar -czf dist/claude-desktop-session-sync-linux-$(VERSION)-linux-arm64.tar.gz -C dist/linux-arm64 .
 
 clean:
 	rm -rf dist

@@ -1,6 +1,6 @@
 # Run from the repository root: makepkg --nodeps
 pkgname=claude-desktop-session-sync-linux
-pkgver=0.5.0
+pkgver=0.6.2
 pkgrel=1
 pkgdesc='Offline bidirectional synchronization of Claude Desktop Code session records'
 arch=('x86_64' 'aarch64')
